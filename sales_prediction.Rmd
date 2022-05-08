@@ -1,0 +1,451 @@
+---
+title: "BigMart Sales Prediction"
+author: "Asmita Dabholkar"
+date: "4/24/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+setwd("F:/MSIM/Sem 2/IS517 Methods of Data Science/Final Project")
+```
+
+Importing the required libraries:
+```{r}
+
+library(readr)
+library(caTools)
+library(caret)
+library(ggplot2)
+library(tree)
+library(randomForest)
+library(gbm)
+library(BART)
+library(e1071)
+library(Metrics)
+```
+
+Reading the train and test data:
+```{r}
+data <- read.csv("Train.csv")
+```
+
+```{r}
+View(data)
+```
+
+# Data Cleaning
+
+```{r}
+sum(is.na(data))
+```
+Making values of Item_Fat_Content uniform throughout the dataset:
+```{r}
+unique(data$Item_Fat_Content)
+
+for(i in 1:nrow(data)){
+  if(data$Item_Fat_Content[i] == 'low fat' | data$Item_Fat_Content[i] == 'LF'){
+    data$Item_Fat_Content[i] <- 'Low Fat'
+  }
+  if(data$Item_Fat_Content[i] == 'reg'){
+    data$Item_Fat_Content[i] <- 'Regular'
+  }
+}
+```
+
+```{r}
+unique(data$Item_Fat_Content)
+
+```
+Substituting 0 item visibility with the median visibility of the respective item type:
+```{r}
+for(i in 1:nrow(data)){
+  if(data$Item_Visibility[i] == 0){
+    type <- data$Item_Type[i]
+    type_median <- median(data$Item_Visibility[data$Item_Type == type])
+    data$Item_Visibility[i] <- type_median
+  }
+}
+
+```
+
+
+Substituting missing item weight with the median weight of the respective item category:
+```{r}
+for(i in 1:nrow(data)){
+  if(is.na(data$Item_Weight[i]) == TRUE){
+    type <- data$Item_Type[i]
+    type_median <- median(data$Item_Weight[data$Item_Type == type], na.rm = TRUE)
+    data$Item_Weight[i] <- type_median
+  }
+}
+```
+
+Checking for missing values after imputation:
+```{r}
+sum(is.na(data))
+```
+Substituting missing values in Outlet_Size column with the mode of the column:
+```{r}
+for(i in 1:nrow(data)){
+  if(data$Outlet_Size[i] == ''){
+    size <- mode(data$Outlet_Size)
+    data$Outlet_Size[i] <- size
+  }
+}
+```
+
+Creating a new predictor Years_established from Outlet_Establishment_Year to show outlet age:
+```{r}
+data$Years_established <- 2022 - data$Outlet_Establishment_Year
+```
+
+Creating a new predictor Item_Category from Item_Identifier to show a broader category of items:
+```{r}
+for(i in 1:nrow(data)){
+  category <- substr(data$Item_Identifier[i],1,2)
+  data$Item_Category[i] <- category
+}
+```
+
+# Bivariate Analysis
+
+Item Visibility v/s Item Sales
+```{r}
+ggplot(data, aes(Item_Visibility, Item_Outlet_Sales, col = Item_Type)) + geom_point()  
+
+```
+
+
+Item MRP v/s Item Sales
+```{r}
+ggplot(data, aes(Item_MRP, Item_Outlet_Sales)) + geom_point()  
+```
+Outlet Type v/s Item Sales
+```{r}
+ggplot(data, aes(Outlet_Type, Item_Outlet_Sales, col=Outlet_Type)) + geom_point()
+```
+Outlet Size v/s Item Sales
+```{r}
+ggplot(data, aes(Outlet_Size, Item_Outlet_Sales, col=Outlet_Size)) + geom_point()
+```
+Outlet Age v/s Item Sales
+```{r}
+ggplot(data, aes(Years_established, Item_Outlet_Sales, col=Outlet_Type)) + geom_point()
+```
+Converting categorical variables in the dataset to factors:
+```{r}
+data$item_fat_content_cat <- as.factor(data$Item_Fat_Content)
+data$item_fat_content_cat <- as.numeric(data$item_fat_content_cat)
+
+data$item_type_cat <- as.factor(data$Item_Type)
+data$item_type_cat <- as.numeric(data$item_type_cat)
+
+data$outlet_size_cat <- as.factor(data$Outlet_Size)
+data$outlet_size_cat <- as.numeric(data$outlet_size_cat)
+
+data$outlet_loc_type_cat <- as.factor(data$Outlet_Location_Type)
+data$outlet_loc_type_cat <- as.numeric(data$outlet_loc_type_cat)
+
+data$outlet_type_cat <- as.factor(data$Outlet_Type)
+data$outlet_type_cat <- as.numeric(data$outlet_type_cat)
+
+data$item_category_cat <- as.factor(data$Item_Category)
+data$item_category_cat <- as.numeric(data$item_category_cat)
+
+```
+
+Selecting the relevant columns into a new dataframe:
+```{r}
+data_relevant <- data[, c("Item_Weight", "Item_Visibility", "Item_MRP", 
+                        "Years_established", "Item_Outlet_Sales", "item_fat_content_cat",
+                        "item_type_cat", "outlet_size_cat", "outlet_loc_type_cat",
+                        "outlet_type_cat", "item_category_cat")]
+
+```
+
+
+```{r}
+head(data_relevant)
+```
+
+Checking for missing values:
+```{r}
+sum(is.na(data_relevant))
+```
+
+Splitting data into training and testing:
+```{r}
+set.seed(123)
+
+sample = sample.split(data_relevant, SplitRatio = 0.70)
+train = subset(data_relevant, sample == TRUE)
+test  = subset(data_relevant, sample == FALSE)
+
+x_train = subset(train, select = -c(Item_Outlet_Sales))
+x_test = subset(test, select = -c(Item_Outlet_Sales))
+
+y_train <- subset(train, select = c(Item_Outlet_Sales))
+y_test <- subset(test, select = c(Item_Outlet_Sales))
+```
+
+
+# Decision Tree
+
+```{r}
+tree_model <- tree(Item_Outlet_Sales ~ ., data=train)
+summary(tree_model)
+```
+Plot decision tree:
+```{r}
+plot(tree_model)
+text(tree_model, pretty = 0)
+```
+From the model summary and model plot, we see that item MRP, outlet type, and outlet age are the most important predictors for sales prediction.
+
+Prediction on test data:
+```{r}
+predict_tree <- predict(tree_model, newdata = test)
+test_rmse_tree <- rmse(predict_tree, test$Item_Outlet_Sales)
+test_rmse_tree
+```
+
+#  Bagging and Random Forest:
+```{r}
+set.seed(123)
+
+rfmodel1 <- randomForest(x_train, y_train[,1], xtest = x_test, ytest = y_test[,1], mtry = ncol(x_train)-1, ntree = 100)
+
+rfmodel2 <- randomForest(x_train, y_train[,1], xtest = x_test, ytest = y_test[,1], mtry = (ncol(x_train) - 1)/3, ntree = 100)
+
+rfmodel3 <- randomForest(x_train, y_train[,1], xtest = x_test, ytest = y_test[,1], mtry = sqrt(ncol(x_train) - 1), ntree = 100)
+
+```
+
+Plotting the test MSE:
+```{r}
+plot(1:100, rfmodel1$test$mse, col="red", type="l", ylim=c(1200000, 2000000), xlab = "Number of trees", ylab = "Test MSE")
+lines(1:100, rfmodel2$test$mse, col="blue", type="l")
+lines(1:100, rfmodel3$test$mse, col="green", type="l")
+legend("topright", c("m=p", "m=p/3", "m=sqrt(p)"), col=c("red", "blue", "green"), cex=1, lty=1)
+```
+From the test MSE plot, it is evident that random forest (m = sqrt(p)) performs better on the data compared to bagging (m = p).
+
+Variable Importance plot for random forest:
+```{r}
+varImpPlot(rfmodel3)
+```
+From the plot, we see that item MRP, outlet type, item visibility, and outlet age are the important variables.
+
+```{r}
+min_mse <- min(rfmodel3$test$mse)
+sqrt(min_mse)
+```
+
+# Boosting
+```{r}
+set.seed(123)
+
+boost_model <- gbm(Item_Outlet_Sales ~., data = train, distribution = "gaussian", n.trees = 100, interaction.depth = 3)
+summary(boost_model)
+```
+From the model summary, we see that item MRP, outlet type, outlet age, and item visibility are the top most influential variables.
+
+
+Prediction on test data:
+```{r}
+predict_boost <- predict(boost_model, newdata = test)
+test_rmse_boost <- rmse(predict_boost, test$Item_Outlet_Sales)
+test_rmse_boost
+```
+# Bayesian Additive Regression Trees (BART)
+
+```{r}
+set.seed(123)
+bart_model <- gbart(x_train, y_train[,1], x.test = x_test)
+summary(bart_model)
+```
+
+```{r}
+
+ord <- order (bart_model$varcount.mean , decreasing = T)
+
+bart_model$varcount.mean[ord]
+
+```
+From the model summary and variable count, we see predictors like item MRP, outlet type, outlet size, item category are the most occurred variables in the model.
+
+Test RMSE of BART:
+```{r}
+yhat_bart <- bart_model$yhat.test.mean
+test_mse_bart <- mean((y_test[,1] - yhat_bart)^2)
+sqrt(test_mse_bart)
+```
+
+# Support Vector Regression - Radial
+```{r}
+optimum_svm <- tune(svm, Item_Outlet_Sales ~., data = train, kernel="radial", ranges = list(cost = c(0.01, 0.1, 1, 10)))
+optimum_svm
+```
+
+```{r}
+plot(optimum_svm)
+```
+Test RMSE for radial kernel:
+```{r}
+best_svm <- optimum_svm$best.model
+predict_svm2 <- predict(best_svm, test)
+rmse(predict_svm2, test$Item_Outlet_Sales)
+```
+
+# Support Vector Regression - Linear
+
+```{r}
+linear_svm <- tune(svm, Item_Outlet_Sales ~., data = train, kernel="linear", ranges = list(cost = c(0.01, 0.1, 1, 10)))
+linear_svm
+```
+
+```{r}
+plot(linear_svm)
+```
+
+Test RMSE of linear kernel:
+```{r}
+best_lin_svm <- linear_svm$best.model
+predict_lin_svm2 <- predict(best_lin_svm, test)
+rmse(predict_lin_svm2, test$Item_Outlet_Sales)
+```
+
+# Support Vector Regression - Polynomial
+```{r}
+poly_svm <- tune(svm, Item_Outlet_Sales ~., data = train, kernel="poly", ranges = list(cost = c(0.01, 0.1, 1, 10)))
+poly_svm
+```
+
+```{r}
+plot(poly_svm)
+```
+Test RMSE for polynomial kernel:
+```{r}
+best_poly_svm <- poly_svm$best.model
+predict_poly_svm2 <- predict(best_poly_svm, test)
+rmse(predict_poly_svm2, test$Item_Outlet_Sales)
+```
+
+```{r}
+test$Years_established <- as.numeric(test$Years_established)
+train$Years_established <- as.numeric(train$Years_established)
+
+
+```
+
+
+# Ridge Regression
+
+```{r}
+
+library(glmnet)
+train_matrix<- model.matrix(Item_Outlet_Sales~., data= train)
+test_matrix<- model.matrix(Item_Outlet_Sales~., data= test)
+grid= 10^seq(10,-2, length=1000)
+```
+
+
+```{r}
+ridge<- glmnet(train_matrix, train$Item_Outlet_Sales, alpha=0, lambda=grid, thresh=1e-12)
+plot(ridge)
+dim(coef(ridge))
+```
+
+k-fold cross validation for the ridge regression model:
+```{r}
+set.seed(1)
+cv_ridge<- cv.glmnet(train_matrix, train$Item_Outlet_Sales, alpha=0)
+plot(cv_ridge)
+best_lambda_ridge <- cv_ridge$lambda.min
+best_lambda_ridge
+```
+Test RMSE for ridge regression:
+```{r}
+ridge_prediction<- predict(ridge,newx=test_matrix, s=best_lambda_ridge)
+ridge_MSE <- mean((ridge_prediction -test$Item_Outlet_Sales)^2)
+print(sqrt(ridge_MSE))
+```
+
+# LASSO Regression
+
+```{r}
+lasso<- glmnet(train_matrix, train$Item_Outlet_Sales, alpha=1, lambda=grid, thresh=1e-12)
+plot(lasso)
+dim(coef(lasso))
+```
+
+k-fold cross validation for the lasso regression model
+```{r}
+set.seed(1)
+cv_lasso<- cv.glmnet(train_matrix, train$Item_Outlet_Sales, alpha=1)
+plot(cv_lasso)
+best_lambda_lasso <- cv_lasso$lambda.min
+best_lambda_lasso
+```
+
+Test RMSE for LASSO regression
+```{r}
+lasso_prediction<- predict(lasso,newx=test_matrix, s=best_lambda_ridge)
+lasso_MSE <- mean((lasso_prediction -test$Item_Outlet_Sales)^2)
+print(sqrt(lasso_MSE))
+```
+
+
+# PCR
+
+```{r}
+library(pls)
+set.seed(2)
+pcr_fit = pcr(Item_Outlet_Sales~., data = train, scale = TRUE, validation = "CV")
+summary(pcr_fit)
+
+```
+Plot for no. of components v/s MSE
+```{r}
+validationplot(pcr_fit, val.type = "MSEP")
+```
+Test RMSE for PCR:
+```{r}
+pcr_pred = predict(pcr_fit, test, ncomp=6)
+                   
+sqrt(mean((pcr_pred- test$Item_Outlet_Sales)^2))
+```
+# PLS
+
+```{r}
+set.seed(1)
+pls_fit = plsr(Item_Outlet_Sales~., data = train, scale = TRUE, validation = "CV")
+summary(pls_fit)
+validationplot(pls_fit, val.type = "MSEP")
+```
+Test RMSE for cross-validation:
+```{r}
+pls_pred = predict(pls_fit, test, ncomp =5)
+sqrt(mean((pls_pred - test$Item_Outlet_Sales)^2))
+
+```
+However, as a result of the way PCR/PLS is implemented, the final model is more difficult to interpret because it does not perform any kind of variable selection or even directly produce coefficient estimates.
+
+# Linear Regression
+```{r}
+linear <- lm(Item_Outlet_Sales~., data = train)
+summary(linear)
+
+```
+Test RMSE for linear regression:
+```{r}
+linear_predict <- predict(linear, newdata = test)
+rmse(linear_predict, test$Item_Outlet_Sales)
+```
+For linear regression, item MRP, outlet age, outlet size, outlet location type, outlet type are the significant variables.
+
